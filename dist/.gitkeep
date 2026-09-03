@@ -1,0 +1,3 @@
+# Built DMG, .app, and OfflineVoice-Models are not in git.
+# Rebuild: ./scripts/build_dmg.sh
+# Models: see docs/SETUP.md

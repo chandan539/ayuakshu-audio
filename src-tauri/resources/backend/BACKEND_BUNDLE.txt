@@ -1,0 +1,4 @@
+name=offlinevoice-backend
+arch=aarch64-apple-darwin
+built=2026-09-03T11:46:33Z
+note=Model weights are NOT included. Install OfflineVoice-Models separately.

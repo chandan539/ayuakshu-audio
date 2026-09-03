@@ -1,0 +1,21 @@
+{
+  "name": "offline-voice",
+  "version": "0.6.0",
+  "private": true,
+  "description": "AYUAKSHU Audio — fully offline Mac desktop app for local voice cloning + Hindi/English TTS.",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build --target aarch64-apple-darwin",
+    "backend": "./scripts/run_backend.sh",
+    "bundle:backend": "./scripts/bundle_backend.sh",
+    "build:dmg": "./scripts/build_dmg.sh",
+    "test:backend": "backend/.venv/bin/python -m pytest backend/tests -v",
+    "test:offline": "./scripts/test_offline.sh"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}

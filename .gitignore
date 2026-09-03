@@ -1,0 +1,48 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Virtualenv
+backend/.venv/
+
+# Local caches
+backend/.cache/
+.cache/
+
+# Model weights (downloaded separately; do not commit)
+models/tts/chatterbox/**
+!models/tts/chatterbox/.gitkeep
+models/whisper/**
+!models/whisper/.gitkeep
+models/extras/**
+!models/extras/.gitkeep
+*.pt
+*.safetensors
+
+# Packaging / build artifacts
+backend/packaging/build/
+backend/packaging/dist/
+src-tauri/resources/backend/offlinevoice-backend/
+src-tauri/target/
+
+# Generated audio / app data
+outputs/**
+!outputs/.gitkeep
+
+# Dist outputs (DMG / .app / model pack). Keep the folder in git.
+dist/*
+!dist/.gitkeep
+OfflineVoice-Models/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+node_modules/
+frontend/node_modules/
+frontend/dist/

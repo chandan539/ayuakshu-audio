@@ -1,0 +1,20 @@
+# Phase 1 — local TTS (Chatterbox Multilingual)
+# Phase 2 — audio pipeline helpers
+# Phase 3 — local FastAPI backend
+# Pin where practical; torch version follows chatterbox Python-version markers.
+
+# setuptools 81+ can omit pkg_resources; resemble-perth still imports it.
+setuptools>=70,<81
+chatterbox-tts==0.1.7
+huggingface_hub>=0.26.0
+soundfile>=0.12.1
+numpy>=2.0.0
+pyloudnorm>=0.1.1
+lameenc>=1.7.0
+fastapi>=0.115.0
+uvicorn>=0.32.0
+httpx>=0.27.0
+pydantic>=2.0.0
+pytest>=8.0.0
+pyinstaller>=6.0.0
+openai-whisper>=20231117

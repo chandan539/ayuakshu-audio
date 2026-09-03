@@ -1,0 +1,3 @@
+# Chatterbox weights are not in git. Download with:
+#   backend/.venv/bin/python backend/scripts/install_chatterbox_model.py
+# Source: https://huggingface.co/ResembleAI/chatterbox

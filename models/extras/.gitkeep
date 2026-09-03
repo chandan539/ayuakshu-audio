@@ -1,0 +1,2 @@
+# Optional pkuseg extras are packed into OfflineVoice-Models when present.
+# Hindi/English TTS does not require this folder.

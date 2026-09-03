@@ -1,0 +1,2 @@
+# Whisper checkpoints are not in git. Download with:
+#   backend/.venv/bin/python backend/scripts/install_whisper_model.py --size small
