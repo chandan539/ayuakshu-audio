@@ -99,6 +99,7 @@ class SettingsDefaults:
     crossfade_ms: float = 40.0
     unload_model_after_inactivity: bool = False
     clone_mode: str = "fast"  # fast = speed + your voice; quality = slower, closer clone
+    export_directory: str = ""  # empty = ask with Save dialog each time
 
 
 def recommended_max_chunk_chars(memory_gb: float | None = None) -> int:

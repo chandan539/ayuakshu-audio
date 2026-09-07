@@ -1,6 +1,6 @@
 {
   "name": "offline-voice",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "AYUAKSHU Audio — fully offline Mac desktop app for local voice cloning + Hindi/English TTS.",
   "scripts": {

@@ -10,6 +10,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from ..config import detect_system_info
 from ..tts.errors import ModelNotInstalledError
 from .schemas import (
+    ExportAudioRequest,
     GenerateRequest,
     HealthResponse,
     InstallModelRequest,
@@ -63,6 +64,14 @@ def get_settings(request: Request):
 @router.put("/settings")
 def update_settings(body: SettingsUpdateRequest, request: Request):
     values = {k: v for k, v in body.model_dump().items() if v is not None}
+    folder = values.get("export_directory")
+    if isinstance(folder, str) and folder.strip():
+        from ..security import PathSecurityError, ensure_export_destination
+
+        try:
+            values["export_directory"] = str(ensure_export_destination(Path(folder)))
+        except PathSecurityError as exc:
+            raise HTTPException(400, str(exc)) from exc
     return get_state(request).settings.update(values)
 
 
@@ -438,6 +447,52 @@ def job_audio_mp3(job_id: str, request: Request):
     if not path.is_file():
         raise HTTPException(404, "MP3 missing on disk")
     return FileResponse(path, media_type="audio/mpeg", filename="output.mp3")
+
+
+@router.post("/jobs/{job_id}/export")
+def export_job_audio(job_id: str, body: ExportAudioRequest, request: Request):
+    """Copy generated WAV/MP3 to a user-chosen Desktop, USB, or other folder."""
+    from ..security import PathSecurityError
+    from ..services.export_audio import export_job_files
+
+    job = get_state(request).jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    dest = (body.destination or "").strip()
+    if not dest:
+        raise HTTPException(400, "Choose a destination file or folder")
+    try:
+        result = export_job_files(
+            job,
+            fmt=body.format,
+            destination=dest,
+            reveal=body.reveal,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, PathSecurityError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(500, f"Could not save file: {exc}") from exc
+
+    folder = result.get("folder")
+    if folder:
+        get_state(request).settings.update({"export_directory": folder})
+    return result
+
+
+@router.post("/jobs/{job_id}/reveal")
+def reveal_job_audio(job_id: str, request: Request, format: str = "wav"):
+    """Open Finder with the generated file selected."""
+    from ..services.export_audio import reveal_job_file
+
+    job = get_state(request).jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    try:
+        return reveal_job_file(job, format)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/transcribe")

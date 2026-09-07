@@ -250,6 +250,21 @@ export const api = {
     request<Job>(`/jobs/${id}/cancel`, { method: 'POST' }),
   resumeJob: (id: string) =>
     request<{ job_id: string; job: Job }>(`/jobs/${id}/resume`, { method: 'POST' }),
+  exportJob: (id: string, body: { format: 'wav' | 'mp3' | 'both'; destination: string; reveal?: boolean }) =>
+    request<{
+      ok: boolean
+      copied: Array<{ format: string; path: string }>
+      folder: string
+      message: string
+    }>(`/jobs/${id}/export`, {
+      method: 'POST',
+      body: JSON.stringify({ reveal: true, ...body }),
+    }),
+  revealJob: (id: string, format: 'wav' | 'mp3' = 'wav') =>
+    request<{ ok: boolean; path: string; folder: string }>(
+      `/jobs/${id}/reveal?format=${format}`,
+      { method: 'POST' },
+    ),
   clearTemp: () =>
     request<{ removed: number }>('/storage/clear-temporary', { method: 'POST' }),
 }

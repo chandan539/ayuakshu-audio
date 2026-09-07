@@ -62,6 +62,13 @@ class SettingsUpdateRequest(BaseModel):
     crossfade_ms: Optional[float] = None
     unload_model_after_inactivity: Optional[bool] = None
     clone_mode: Optional[str] = None
+    export_directory: Optional[str] = None
+
+
+class ExportAudioRequest(BaseModel):
+    format: str = "wav"  # wav | mp3 | both
+    destination: str
+    reveal: bool = True
 
 
 class InstallModelRequest(BaseModel):

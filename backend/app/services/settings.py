@@ -27,6 +27,7 @@ class SettingsService:
             "crossfade_ms": DEFAULTS.crossfade_ms,
             "unload_model_after_inactivity": DEFAULTS.unload_model_after_inactivity,
             "clone_mode": DEFAULTS.clone_mode,
+            "export_directory": DEFAULTS.export_directory,
             "setup_completed": False,
             "setup_skipped": False,
         }
