@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AYUAKSHU Audio",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "identifier": "com.ayuakshu.audio",
   "build": {
     "frontendDist": "../frontend/dist",

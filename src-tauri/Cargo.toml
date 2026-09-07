@@ -1,6 +1,6 @@
 [package]
 name = "offlinevoice"
-version = "0.6.0"
+version = "0.6.1"
 description = "AYUAKSHU Audio — fully offline Mac voice cloning + TTS"
 authors = ["OfflineVoice"]
 edition = "2021"

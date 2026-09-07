@@ -179,7 +179,7 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
           stopPolling()
           setBusy(false)
           if (latest.status === 'completed') {
-            setNotice('Generation complete. Audio saved locally as one WAV + MP3.')
+            setNotice('Generation complete. Use Save WAV as… / Save MP3 as… to pick Desktop, Downloads, or a USB drive.')
             void onRefresh()
           } else if (latest.status === 'failed' || latest.status === 'interrupted') {
             setError(latest.error || 'Generation paused. Click Resume to continue this long file.')
@@ -439,10 +439,12 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
         )}
 
         <AudioPlayer
+          jobId={job?.id}
           wavPath={job?.output_wav && job.id ? `${getBaseUrl()}/jobs/${job.id}/audio.wav` : null}
           mp3Path={job?.output_mp3 && job.id ? `${getBaseUrl()}/jobs/${job.id}/audio.mp3` : null}
           wavLabel={job?.output_wav}
           mp3Label={job?.output_mp3}
+          onMessage={setNotice}
         />
       </div>
 
