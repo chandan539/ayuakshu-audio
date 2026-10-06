@@ -43,6 +43,8 @@ export type Health = {
   model_ready: boolean
   model_loaded?: boolean
   model_warming?: boolean
+  tts_device?: string
+  tts_fast_path?: boolean | null
   app_data: string
 }
 

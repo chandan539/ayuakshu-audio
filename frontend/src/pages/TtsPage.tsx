@@ -73,6 +73,8 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
   const [notice, setNotice] = useState<string | null>(null)
   const [modelLoaded, setModelLoaded] = useState(false)
   const [modelWarming, setModelWarming] = useState(false)
+  const [ttsDevice, setTtsDevice] = useState<string>('unknown')
+  const [ttsFastPath, setTtsFastPath] = useState<boolean | null>(null)
   const pollRef = useRef<number | null>(null)
   const appliedProject = useRef<string | null>(initialProject?.id || null)
 
@@ -108,6 +110,8 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
         if (cancelled) return
         setModelLoaded(Boolean(h.model_loaded))
         setModelWarming(Boolean(h.model_warming))
+        setTtsDevice(String(h.tts_device || 'unknown'))
+        setTtsFastPath(h.tts_fast_path ?? null)
       } catch {
         /* ignore */
       }
@@ -316,9 +320,25 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
           AI model is warming up in the background. Wait until ready for faster first generation.
         </div>
       )}
-      {modelReady && modelLoaded && !modelWarming && !busy && (
+      {modelReady && ttsDevice === 'cpu' && (
+        <div className="notice danger">
+          TTS is running on CPU, which is much slower. This app expects Apple Silicon GPU (MPS).
+        </div>
+      )}
+      {modelReady && cloneMode === 'quality' && (
+        <div className="notice warn">
+          Best clone is 5–10× slower than Fast clone. Switch to Fast clone unless you need maximum voice match.
+        </div>
+      )}
+      {modelReady && ttsDevice === 'mps' && cloneMode === 'fast' && ttsFastPath === false && (
+        <div className="notice warn">
+          Fast turbo path failed and fell back to the slow generator. Check logs for “Turbo sampling failed”.
+        </div>
+      )}
+      {modelReady && ttsDevice === 'mps' && cloneMode === 'fast' && !busy && (
         <div className="notice" style={{ opacity: 0.85 }}>
-          AI model is loaded in memory — generation should start promptly.
+          Apple GPU (MPS){modelLoaded ? ' · model loaded' : ''} · Fast clone
+          {ttsFastPath === true ? ' · turbo on' : ''}.
         </div>
       )}
       {notice && <div className="notice">{notice}</div>}

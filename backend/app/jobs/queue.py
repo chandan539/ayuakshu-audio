@@ -19,6 +19,7 @@ from ..tts.manager import TTSManager
 from ..services.ids import new_id, utc_now
 from ..services.projects import ProjectService
 from ..services.settings import SettingsService
+from ..services.tts_cache import chunk_cache_path, copy_if_cached, store_chunk
 from ..services.voices import VoiceService
 
 JobStatus = str  # queued | running | completed | failed | cancelled | interrupted
@@ -418,6 +419,13 @@ class JobQueue:
         clone_mode = pronunciation_blob.get("clone_mode") or self.settings.get("clone_mode", "fast")
         if hasattr(engine, "clone_mode"):
             engine.clone_mode = "quality" if clone_mode == "quality" else "fast"
+        device = getattr(engine, "device", "unknown")
+        self._update_job(
+            job_id,
+            stage=f"Generating on {device} · {clone_mode} clone…",
+            progress=22,
+        )
+        ref_mtime = int(Path(ref).stat().st_mtime_ns)
         crossfade_ms = float(self.settings.get("crossfade_ms", 40.0))
         mp3_bitrate = int(self.settings.get("mp3_bitrate", 192))
 
@@ -459,12 +467,28 @@ class JobQueue:
                 progress=round(pct, 1),
             )
             try:
-                engine.generate(
+                cache_file = chunk_cache_path(
+                    self.paths.cache,
                     text=chunk["text"] or "",
+                    voice_id=str(job["voice_id"] or ""),
                     language=job["language"],
-                    reference_audio=str(ref),
-                    output_path=str(chunk_path),
+                    clone_mode="quality" if clone_mode == "quality" else "fast",
+                    ref_mtime_ns=ref_mtime,
                 )
+                if copy_if_cached(cache_file, chunk_path):
+                    stage = f"Chunk {current}/{speech_total} · cache hit"
+                else:
+                    engine.generate(
+                        text=chunk["text"] or "",
+                        language=job["language"],
+                        reference_audio=str(ref),
+                        output_path=str(chunk_path),
+                    )
+                    store_chunk(cache_file, chunk_path)
+                    infer = float(getattr(engine, "last_infer_sec", 0) or 0)
+                    path_used = getattr(engine, "last_path", "") or ""
+                    stage = f"Chunk {current}/{speech_total} · {infer:.1f}s · {path_used}"
+                self._update_job(job_id, stage=stage, current_chunk=current, progress=round(pct, 1))
                 with self._lock:
                     self.conn.execute(
                         """

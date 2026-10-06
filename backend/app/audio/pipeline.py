@@ -69,16 +69,22 @@ class AudioPipeline:
         self.mp3_bitrate = mp3_bitrate
 
     def prepare_reference(self, reference_audio: str | Path) -> Path:
+        src = Path(reference_audio).expanduser().resolve()
         voices_dir = self.work_dir / "reference"
         voices_dir.mkdir(parents=True, exist_ok=True)
         out = voices_dir / "reference.wav"
-        result = preprocess_reference(reference_audio, out)
+        stamp = voices_dir / "reference.src"
+        key = f"{src}\n{src.stat().st_mtime_ns}\n{src.stat().st_size}"
+        if out.is_file() and stamp.is_file() and stamp.read_text(encoding="utf-8") == key:
+            return out
+        result = preprocess_reference(src, out)
         if not result.validation.usable:
             # Spec: allow imperfect but usable; block only unusable.
             raise ValueError(
                 "Reference audio is not usable: "
                 + "; ".join(result.validation.warnings or ["unknown issue"])
             )
+        stamp.write_text(key, encoding="utf-8")
         return Path(result.output_path)
 
     def plan(

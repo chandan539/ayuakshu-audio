@@ -14,7 +14,8 @@ class HealthResponse(BaseModel):
     model_ready: bool
     model_loaded: bool = False
     model_warming: bool = False
-    app_data: str
+    tts_device: str = "unknown"
+    tts_fast_path: Optional[bool] = None
 
 
 class VoiceCreateRequest(BaseModel):

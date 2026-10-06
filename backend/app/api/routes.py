@@ -37,6 +37,7 @@ router = APIRouter()
 def health(request: Request):
     state = get_state(request)
     engine = state.tts.get_engine(state.settings.get("default_engine", "chatterbox"))
+    info = engine.runtime_info() if hasattr(engine, "runtime_info") else {}
     return HealthResponse(
         status="ok",
         offline_mode=bool(state.settings.get("offline_mode", True)),
@@ -48,6 +49,8 @@ def health(request: Request):
             or (getattr(engine, "is_loaded", False) and not getattr(engine, "is_warmed", True))
         ),
         app_data=str(state.paths.root),
+        tts_device=str(info.get("tts_device") or getattr(engine, "device", "unknown")),
+        tts_fast_path=info.get("tts_fast_path"),
     )
 
 
