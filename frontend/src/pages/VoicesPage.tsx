@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { api, getBaseUrl, type Voice } from '../services/api'
+import { VoiceDesign } from '../components/VoiceDesign'
 import { startWavRecording, type RecorderHandle } from '../services/recorder'
 
 type Props = {
@@ -18,6 +19,7 @@ export function VoicesPage({ voices, onRefresh }: Props) {
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [playingId, setPlayingId] = useState<string | null>(null)
+  const [designOpen, setDesignOpen] = useState(false)
   const recorderRef = useRef<RecorderHandle | null>(null)
   const tickRef = useRef<number | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -177,7 +179,7 @@ export function VoicesPage({ voices, onRefresh }: Props) {
   return (
     <div>
       <h1 className="page-title">Voices</h1>
-      <p className="page-sub">Import or record a reference voice. Audio stays on this Mac and is never uploaded.</p>
+      <p className="page-sub">Import, record, or design how a cloned voice performs. Audio stays on this Mac.</p>
 
       <div className="notice">
         Only use voice recordings you own or have permission to use.
@@ -219,6 +221,14 @@ export function VoicesPage({ voices, onRefresh }: Props) {
           >
             {recording ? `Stop & Save (${elapsed}s)` : 'Record Voice'}
           </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || voices.length === 0}
+            onClick={() => setDesignOpen(true)}
+          >
+            Voice Design
+          </button>
         </div>
         <p className="muted" style={{ marginBottom: 0 }}>
           Recommended: 10–30 seconds of clear speech, minimal background noise, single speaker.
@@ -236,6 +246,7 @@ export function VoicesPage({ voices, onRefresh }: Props) {
                 <strong>{v.name}</strong>
                 <div className="muted">
                   {v.language.toUpperCase()} · {v.engine}
+                  {v.metadata?.designed ? ' · designed' : ''}
                   {v.metadata?.validation?.quality ? ` · ${v.metadata.validation.quality}` : ''}
                   {typeof secs === 'number' ? ` · ${secs.toFixed(1)}s` : ''}
                 </div>
@@ -262,6 +273,16 @@ export function VoicesPage({ voices, onRefresh }: Props) {
           )
         })}
       </div>
+      {designOpen && (
+        <VoiceDesign
+          voices={voices}
+          onCreated={async () => {
+            setMessage('Designed voice saved. Select it on Text to Speech.')
+            await onRefresh()
+          }}
+          onClose={() => setDesignOpen(false)}
+        />
+      )}
     </div>
   )
 }

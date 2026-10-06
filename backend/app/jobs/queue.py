@@ -88,6 +88,7 @@ class JobQueue:
         pronunciation: dict[str, str] | None = None,
         export_mp3_file: bool = True,
         clone_mode: str = "fast",
+        delivery: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not text.strip():
             raise ValueError("Text is required")
@@ -146,6 +147,7 @@ class JobQueue:
                             "map": pronunciation or {},
                             "export_mp3": export_mp3_file,
                             "clone_mode": "quality" if clone_mode == "quality" else "fast",
+                            "delivery": delivery or {},
                         },
                         ensure_ascii=False,
                     ),
@@ -419,6 +421,14 @@ class JobQueue:
         clone_mode = pronunciation_blob.get("clone_mode") or self.settings.get("clone_mode", "fast")
         if hasattr(engine, "clone_mode"):
             engine.clone_mode = "quality" if clone_mode == "quality" else "fast"
+        delivery = pronunciation_blob.get("delivery") or {}
+        if hasattr(engine, "set_delivery") and delivery:
+            engine.set_delivery(
+                exaggeration=float(delivery.get("exaggeration", 0.5)),
+                temperature=float(delivery.get("temperature", 0.6)),
+                cfg_weight=float(delivery.get("cfg_weight", 0.45)),
+                repetition_penalty=float(delivery.get("repetition_penalty", 1.25)),
+            )
         device = getattr(engine, "device", "unknown")
         self._update_job(
             job_id,
@@ -474,6 +484,12 @@ class JobQueue:
                     language=job["language"],
                     clone_mode="quality" if clone_mode == "quality" else "fast",
                     ref_mtime_ns=ref_mtime,
+                    style=(
+                        f"{float(delivery.get('stability', 0)):.2f}:"
+                        f"{float(delivery.get('similarity', 0)):.2f}"
+                        if delivery
+                        else ""
+                    ),
                 )
                 if copy_if_cached(cache_file, chunk_path):
                     stage = f"Chunk {current}/{speech_total} · cache hit"

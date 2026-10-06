@@ -106,6 +106,69 @@ class VoiceService:
         self.conn.commit()
         return self.get(voice_id)  # type: ignore[return-value]
 
+    def design(
+        self,
+        *,
+        base_voice_id: str,
+        name: str,
+        language: str,
+        prompt: str,
+        delivery: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Save a delivery style that still speaks with an existing cloned recording."""
+        base = self.get(base_voice_id)
+        if not base:
+            raise KeyError(f"Voice not found: {base_voice_id}")
+        src = self.reference_path(base_voice_id)
+        voice_id = new_id("voice")
+        voice_dir = resolve_under(self.paths.voices, voice_id)
+        voice_dir.mkdir(parents=True, exist_ok=True)
+        ref_out = voice_dir / "reference.wav"
+        shutil.copy2(src, ref_out)
+        profile = {
+            "id": voice_id,
+            "name": name.strip() or "Designed voice",
+            "language": language,
+            "reference_audio": "reference.wav",
+            "created_at": utc_now(),
+            "engine": base.get("engine") or "chatterbox",
+            "designed": True,
+        }
+        metadata = {
+            "designed": True,
+            "base_voice_id": base_voice_id,
+            "prompt": prompt,
+            "delivery": delivery,
+        }
+        (voice_dir / "profile.json").write_text(
+            json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (voice_dir / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        now = utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO voices(
+                id, name, language, engine, reference_audio,
+                profile_json, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                voice_id,
+                profile["name"],
+                language,
+                profile["engine"],
+                str(ref_out),
+                json.dumps(profile, ensure_ascii=False),
+                json.dumps(metadata, ensure_ascii=False),
+                now,
+                now,
+            ),
+        )
+        self.conn.commit()
+        return self.get(voice_id)  # type: ignore[return-value]
+
     def delete(self, voice_id: str) -> bool:
         voice_id = sanitize_id(voice_id)
         row = self.get(voice_id)

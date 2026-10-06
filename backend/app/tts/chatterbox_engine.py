@@ -54,6 +54,10 @@ class ChatterboxEngine(TTSEngine):
         self._warmed = False
         self._loading = False
         self.clone_mode = "fast"
+        self.temperature = 0.61
+        self.exaggeration = 0.5
+        self.cfg_weight = 0.47
+        self.repetition_penalty = 1.29
         # None = not probed yet; True/False after first turbo attempt.
         self._turbo_ok: bool | None = None
         self.last_infer_sec: float = 0.0
@@ -167,19 +171,60 @@ class ChatterboxEngine(TTSEngine):
                 # Still mark warmed so we don't loop forever on a hard failure path.
                 self._warmed = True
 
-    def prepare_voice(self, reference_audio: str, *, exaggeration: float = 0.5) -> None:
+    def set_delivery(
+        self,
+        *,
+        exaggeration: float,
+        temperature: float,
+        cfg_weight: float,
+        repetition_penalty: float,
+    ) -> None:
+        self.exaggeration = float(exaggeration)
+        self.temperature = float(temperature)
+        self.cfg_weight = float(cfg_weight)
+        self.repetition_penalty = float(repetition_penalty)
+        self._apply_emotion()
+
+    def _apply_emotion(self) -> None:
+        """Update emotion on the cached clone without rebuilding the speaker embedding."""
+        model = self._model
+        if model is None or getattr(model, "conds", None) is None:
+            return
+        try:
+            import torch
+            from chatterbox.models.t3.modules.cond_enc import T3Cond
+        except Exception:
+            return
+        current = model.conds.t3
+        try:
+            current_value = float(current.emotion_adv[0, 0, 0].item())
+        except Exception:
+            current_value = None
+        if current_value is not None and abs(current_value - self.exaggeration) < 0.02:
+            return
+        model.conds.t3 = T3Cond(
+            speaker_emb=current.speaker_emb,
+            cond_prompt_speech_tokens=current.cond_prompt_speech_tokens,
+            emotion_adv=self.exaggeration * torch.ones(1, 1, 1),
+        ).to(device=model.device)
+
+    def prepare_voice(self, reference_audio: str, *, exaggeration: float | None = None) -> None:
         """Cache speaker conditionals for a reference clip (once per file)."""
         self.load()
         assert self._model is not None
+        if exaggeration is not None:
+            self.exaggeration = float(exaggeration)
         ref = Path(reference_audio).expanduser().resolve()
         if not ref.is_file():
             raise FileNotFoundError(f"Reference audio not found: {ref}")
         key = (str(ref), int(ref.stat().st_mtime_ns))
         with self._infer_lock:
             if self._conds_key == key and self._model.conds is not None:
+                self._apply_emotion()
                 return
-            self._model.prepare_conditionals(str(ref), exaggeration=exaggeration)
+            self._model.prepare_conditionals(str(ref), exaggeration=self.exaggeration)
             self._conds_key = key
+            self._apply_emotion()
 
     def generate(
         self,
@@ -278,8 +323,9 @@ class ChatterboxEngine(TTSEngine):
                 ref = Path(reference_audio).expanduser().resolve()
                 key = (str(ref), int(ref.stat().st_mtime_ns))
                 if self._conds_key != key or self._model.conds is None:
-                    self._model.prepare_conditionals(str(ref), exaggeration=0.5)
+                    self._model.prepare_conditionals(str(ref), exaggeration=self.exaggeration)
                     self._conds_key = key
+                self._apply_emotion()
             elif self._model.conds is None:
                 raise ValueError("reference_audio is required when no voice conditionals are loaded")
 
@@ -288,9 +334,10 @@ class ChatterboxEngine(TTSEngine):
                     text=text,
                     language_id=language_id,
                     audio_prompt_path=None,
-                    exaggeration=0.5,
-                    cfg_weight=0.4,
-                    temperature=0.8,
+                    exaggeration=self.exaggeration,
+                    cfg_weight=self.cfg_weight,
+                    temperature=self.temperature,
+                    repetition_penalty=max(1.05, self.repetition_penalty),
                 )
                 used = "quality"
             else:
@@ -384,10 +431,10 @@ class ChatterboxEngine(TTSEngine):
                 speech_tokens = model.t3.inference_turbo(
                     t3_cond=model.conds.t3,
                     text_tokens=text_tokens,
-                    temperature=0.55,
+                    temperature=self.temperature,
                     top_k=1000,
                     top_p=0.9,
-                    repetition_penalty=1.28,
+                    repetition_penalty=self.repetition_penalty,
                     max_gen_len=max_gen_len,
                 )
                 self._turbo_ok = True

@@ -55,6 +55,14 @@ export type Voice = {
   engine: string
   reference_audio: string
   metadata?: {
+    designed?: boolean
+    prompt?: string
+    delivery?: {
+      stability?: number
+      similarity?: number
+      temperature?: number
+      exaggeration?: number
+    }
     validation?: {
       duration_sec?: number
       quality?: string
@@ -192,6 +200,21 @@ export const api = {
   },
   deleteVoice: (id: string) =>
     request<{ deleted: boolean }>(`/voices/${id}`, { method: 'DELETE' }),
+  voiceDesignPresets: () =>
+    request<{
+      presets: Array<{ id: string; label: string; prompt: string; stability: number; similarity: number }>
+    }>('/voices/design/presets'),
+  designVoice: (body: {
+    base_voice_id: string
+    prompt: string
+    preset_id?: string
+    name?: string
+    language?: string
+  }) =>
+    request<{ voice: Voice; delivery: Record<string, unknown> }>('/voices/design', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   transcribe: (body: { audio_path: string; language?: string }) =>
     request<{ text: string; language?: string; segments?: unknown[] }>('/transcribe', {
       method: 'POST',
@@ -241,6 +264,8 @@ export const api = {
     pronunciation?: Record<string, string>
     export_mp3?: boolean
     clone_mode?: 'fast' | 'quality'
+    stability?: number
+    similarity?: number
   }) =>
     request<{ job_id: string; job: Job }>('/generate', {
       method: 'POST',

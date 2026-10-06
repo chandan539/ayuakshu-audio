@@ -17,14 +17,16 @@ def chunk_cache_path(
     language: str,
     clone_mode: str,
     ref_mtime_ns: int,
+    style: str = "",
 ) -> Path:
     payload = "\n".join(
         [
-            "cache-v2-breath-join",
+            "cache-v3-delivery",
             clone_mode,
             language,
             voice_id,
             str(ref_mtime_ns),
+            style,
             text,
         ]
     ).encode("utf-8")

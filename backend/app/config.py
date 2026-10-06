@@ -100,6 +100,8 @@ class SettingsDefaults:
     unload_model_after_inactivity: bool = False
     clone_mode: str = "fast"  # fast = speed + your voice; quality = slower, closer clone
     export_directory: str = ""  # empty = ask with Save dialog each time
+    stability: float = 0.6  # 0 creative, 1 robust
+    similarity: float = 0.75  # 0 loose, 1 close to the cloned recording
 
 
 def recommended_max_chunk_chars(memory_gb: float | None = None) -> int:

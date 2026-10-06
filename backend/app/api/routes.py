@@ -19,6 +19,7 @@ from .schemas import (
     SettingsUpdateRequest,
     TranscribeRequest,
     VoiceCreateRequest,
+    VoiceDesignRequest,
 )
 
 
@@ -182,6 +183,41 @@ def create_voice(body: VoiceCreateRequest, request: Request):
     return voice
 
 
+@router.get("/voices/design/presets")
+def voice_design_presets():
+    from ..tts.delivery import PRESETS
+
+    return {"presets": PRESETS}
+
+
+@router.post("/voices/design")
+def design_voice(body: VoiceDesignRequest, request: Request):
+    from ..tts.delivery import detect_language, style_from_prompt
+
+    style = style_from_prompt(body.prompt, preset_id=body.preset_id)
+    if not str(style.get("prompt") or "").strip():
+        raise HTTPException(400, "Describe the voice or pick a preset.")
+    language = body.language
+    if language in {"", "auto"}:
+        language = detect_language(str(style["prompt"]))
+    if language not in {"hi", "en"}:
+        language = "en"
+    name = (body.name or "").strip() or str(style["name"])
+    try:
+        voice = get_state(request).voices.design(
+            base_voice_id=body.base_voice_id,
+            name=name,
+            language=language,
+            prompt=str(style["prompt"]),
+            delivery=style,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"voice": voice, "delivery": style}
+
+
 @router.post("/voices/upload")
 async def upload_voice(
     request: Request,
@@ -305,11 +341,23 @@ def delete_project(project_id: str, request: Request):
 
 @router.post("/generate")
 def generate(body: GenerateRequest, request: Request):
+    from ..tts.delivery import delivery_settings, detect_language
+
     state = get_state(request)
+    language = body.language
+    if language in {"", "auto"}:
+        language = detect_language(body.text)
+    stability = body.stability
+    similarity = body.similarity
+    if stability is None:
+        stability = float(state.settings.get("stability", 0.6))
+    if similarity is None:
+        similarity = float(state.settings.get("similarity", 0.75))
+    delivery = delivery_settings(stability, similarity)
     try:
         job = state.jobs.create_job(
             text=body.text,
-            language=body.language,
+            language=language,
             voice_id=body.voice_id,
             project_id=body.project_id,
             engine=body.engine,
@@ -317,6 +365,7 @@ def generate(body: GenerateRequest, request: Request):
             pronunciation=body.pronunciation or None,
             export_mp3_file=body.export_mp3,
             clone_mode=body.clone_mode or "fast",
+            delivery=delivery,
         )
     except ModelNotInstalledError as exc:
         raise HTTPException(
