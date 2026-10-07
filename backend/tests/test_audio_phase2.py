@@ -14,7 +14,7 @@ sys.path.insert(0, str(BACKEND))
 
 from app.audio.chunker import chunk_speech_text, chunk_text, parse_pause_markers
 from app.audio.export import export_mp3, export_wav
-from app.audio.merger import crossfade_join, join_segments, silence
+from app.audio.merger import crossfade_join, join_segments, silence, tighten_pauses
 
 
 def test_parse_pause_markers():
@@ -33,6 +33,19 @@ def test_chunk_never_splits_mid_word_when_possible():
     joined = " ".join(parts)
     assert "alpha" in joined and "zeta" in joined
     assert all(len(p) <= 12 or " " not in p for p in parts)
+
+
+def test_hindi_danda_becomes_a_finished_phrase():
+    plan = chunk_text("यह एक बात है। दूसरी बात भी है।", max_chars=500, language="hi")
+    speech = " ".join(c.text for c in plan.speech_chunks)
+    assert "।" not in speech
+    assert "बात है." in speech
+    assert speech.strip().endswith(".")
+
+
+def test_unpunctuated_line_is_closed():
+    plan = chunk_text("बस इतना ही", max_chars=500, language="hi")
+    assert plan.speech_chunks[0].text.endswith(".")
 
 
 def test_hindi_sentence_chunking():
@@ -66,6 +79,25 @@ def test_crossfade_join_length():
     naive = len(a) + len(b)
     assert len(out) < naive
     assert len(out) > sr  # still longer than one chunk
+
+
+def test_long_gap_after_full_stop_is_shortened():
+    sr = 24000
+    tone = np.ones(int(sr * 0.25), dtype=np.float32) * 0.4
+    hole = np.zeros(int(sr * 0.7), dtype=np.float32)
+    audio = np.concatenate([tone, hole, tone])
+    out = tighten_pauses(audio, sr)
+    assert len(out) < len(audio) - int(sr * 0.45)
+    assert len(out) > int(sr * 0.55)
+
+
+def test_short_breath_between_words_is_kept():
+    sr = 24000
+    tone = np.ones(int(sr * 0.2), dtype=np.float32) * 0.4
+    hole = np.zeros(int(sr * 0.12), dtype=np.float32)
+    audio = np.concatenate([tone, hole, tone])
+    out = tighten_pauses(audio, sr)
+    assert abs(len(out) - len(audio)) < 8
 
 
 def test_join_segments_with_pause(tmp_path: Path):

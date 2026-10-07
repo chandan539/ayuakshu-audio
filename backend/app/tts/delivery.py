@@ -32,6 +32,13 @@ def delivery_settings(stability: float = 0.6, similarity: float = 0.75) -> dict[
 
 PRESETS: list[dict[str, object]] = [
     {
+        "id": "talk",
+        "label": "Face to face",
+        "prompt": "A real person explaining something to one listener. Natural, conversational, easy pace, small breaths. Sounds like the local language as people actually speak it.",
+        "stability": 0.42,
+        "similarity": 0.84,
+    },
+    {
         "id": "calm",
         "label": "Calm narrator",
         "prompt": "A calm, steady narrator. Clear diction, even pace, trustworthy and unhurried.",
@@ -85,8 +92,11 @@ def style_from_prompt(prompt: str, *, preset_id: str | None = None) -> dict[str,
     if preset and not text:
         text = str(preset["prompt"])
     low = text.lower()
-    stability = 0.6
-    similarity = 0.75
+    stability = 0.45
+    similarity = 0.82
+    if re.search(r"face.to.face|conversat|explain|one listener|natural|human", low):
+        stability = min(stability, 0.45)
+        similarity = max(similarity, 0.8)
     if re.search(r"calm|steady|slow|serious|controlled|narrat", low):
         stability = max(stability, 0.78)
         similarity = max(similarity, 0.8)

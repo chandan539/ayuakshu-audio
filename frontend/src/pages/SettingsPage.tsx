@@ -86,11 +86,12 @@ export function SettingsPage() {
           <label className="field">
             <span>Voice clone mode</span>
             <select
-              value={String(settings.clone_mode || 'fast')}
+              value={String(settings.clone_mode || 'natural')}
               onChange={(e) => save({ clone_mode: e.target.value })}
             >
-              <option value="fast">Fast clone (your voice + speed)</option>
-              <option value="quality">Best clone (your voice + quality)</option>
+              <option value="natural">Natural (face to face)</option>
+              <option value="fast">Fast (plainer, quicker)</option>
+              <option value="quality">Closest match (slowest)</option>
             </select>
           </label>
           <p className="muted" style={{ gridColumn: '1 / -1', margin: '4px 0 0' }}>

@@ -18,6 +18,13 @@ def test_detect_language():
     assert detect_language("Hello there") == "en"
 
 
+def test_face_to_face_preset_is_conversational():
+    style = style_from_prompt("", preset_id="talk")
+    assert style["name"] == "Face to face"
+    assert style["stability"] < 0.5
+    assert style["similarity"] > 0.8
+
+
 def test_preset_overrides_prompt_energy():
     style = style_from_prompt("quick excited host", preset_id="calm")
     assert style["stability"] >= 0.8

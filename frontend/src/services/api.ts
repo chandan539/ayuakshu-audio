@@ -263,7 +263,7 @@ export const api = {
     max_chars?: number
     pronunciation?: Record<string, string>
     export_mp3?: boolean
-    clone_mode?: 'fast' | 'quality'
+    clone_mode?: 'natural' | 'fast' | 'quality'
     stability?: number
     similarity?: number
   }) =>

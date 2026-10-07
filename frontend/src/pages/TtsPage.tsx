@@ -13,14 +13,14 @@ type Props = {
   initialProject?: Project | null
 }
 
-const DRAFT_KEY = 'ayu.ttsDraft'
+const DRAFT_KEY = 'ayu.ttsDraft.v2'
 
 function loadDraft(): Partial<{
   text: string
   language: 'hi' | 'en' | 'auto'
   voiceId: string
   projectId: string
-  cloneMode: 'fast' | 'quality'
+  cloneMode: 'natural' | 'fast' | 'quality'
   stability: number
   similarity: number
 }> {
@@ -50,10 +50,10 @@ function estimateMinutes(chars: number) {
 }
 
 /** Wall-clock after Fast mode (turbo sampling + 2-step vocoder). First load extra. */
-function estimateGenMinutes(chars: number, mode: 'fast' | 'quality') {
+function estimateGenMinutes(chars: number, mode: 'natural' | 'fast' | 'quality') {
   const audioMins = estimateMinutes(chars)
-  // Fast = your voice, speed-first. Quality = same voice, closer clone, slower.
-  return Math.max(0.2, audioMins * (mode === 'quality' ? 8 : 1.4))
+  const factor = mode === 'quality' ? 8 : mode === 'fast' ? 1.4 : 2.8
+  return Math.max(0.2, audioMins * factor)
 }
 
 function isLoadingStage(stage?: string | null) {
@@ -76,9 +76,9 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
       'नमस्ते, मेरा नाम चंदन है।\nआज हम एक नए विषय के बारे में बात करेंगे।',
   )
   const [projectId, setProjectId] = useState<string>(initialProject?.id || draft.projectId || '')
-  const [cloneMode, setCloneMode] = useState<'fast' | 'quality'>(draft.cloneMode || 'fast')
-  const [stability, setStability] = useState(draft.stability ?? 0.6)
-  const [similarity, setSimilarity] = useState(draft.similarity ?? 0.75)
+  const [cloneMode, setCloneMode] = useState<'natural' | 'fast' | 'quality'>(draft.cloneMode || 'natural')
+  const [stability, setStability] = useState(draft.stability ?? 0.45)
+  const [similarity, setSimilarity] = useState(draft.similarity ?? 0.82)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
@@ -350,7 +350,7 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
       )}
       {modelReady && cloneMode === 'quality' && (
         <div className="notice warn">
-          Best clone is 5–10× slower than Fast clone. Switch to Fast clone unless you need maximum voice match.
+          Closest match runs the full clone and is much slower. Natural is the speaking voice for everyday use.
         </div>
       )}
       {modelReady && ttsDevice === 'mps' && cloneMode === 'fast' && ttsFastPath === false && (
@@ -358,9 +358,10 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
           Fast turbo path failed and fell back to the slow generator. Check logs for “Turbo sampling failed”.
         </div>
       )}
-      {modelReady && ttsDevice === 'mps' && cloneMode === 'fast' && !busy && (
+      {modelReady && ttsDevice === 'mps' && cloneMode !== 'quality' && !busy && (
         <div className="notice" style={{ opacity: 0.85 }}>
-          Apple GPU (MPS){modelLoaded ? ' · model loaded' : ''} · Fast clone
+          Apple GPU (MPS){modelLoaded ? ' · model loaded' : ''} ·{' '}
+          {cloneMode === 'natural' ? 'Natural voice' : 'Fast voice'}
           {ttsFastPath === true ? ' · turbo on' : ''}.
         </div>
       )}
@@ -394,10 +395,11 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
           <span>Model</span>
           <select
             value={cloneMode}
-            onChange={(e) => setCloneMode(e.target.value as 'fast' | 'quality')}
+            onChange={(e) => setCloneMode(e.target.value as 'natural' | 'fast' | 'quality')}
           >
-            <option value="fast">Fast — local, quicker</option>
-            <option value="quality">Best clone — local, slower, closer match</option>
+            <option value="natural">Natural — face to face (recommended)</option>
+            <option value="fast">Fast — plainer, quicker</option>
+            <option value="quality">Closest match — slowest</option>
           </select>
         </label>
 
@@ -432,8 +434,9 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
           />
         </div>
         <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
-          Stability makes the read more even. Similarity keeps it closer to the selected recording.
-          Both stay on this Mac.
+          Natural is the speaking voice: a person explaining something to you, with a short breath
+          between thoughts. Stability makes that more even. Similarity keeps your recording. Fast is
+          thinner and quicker. All of it stays on this Mac.
         </p>
 
         <label className="field" style={{ marginTop: 16 }}>

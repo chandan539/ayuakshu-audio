@@ -21,7 +21,7 @@ def chunk_cache_path(
 ) -> Path:
     payload = "\n".join(
         [
-            "cache-v3-delivery",
+            "cache-v5-flow",
             clone_mode,
             language,
             voice_id,

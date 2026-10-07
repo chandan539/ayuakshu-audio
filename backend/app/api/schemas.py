@@ -51,7 +51,7 @@ class GenerateRequest(BaseModel):
     max_chars: Optional[int] = None
     pronunciation: dict[str, str] = Field(default_factory=dict)
     export_mp3: bool = True
-    clone_mode: Optional[str] = "fast"
+    clone_mode: Optional[str] = "natural"
     stability: Optional[float] = None
     similarity: Optional[float] = None
 

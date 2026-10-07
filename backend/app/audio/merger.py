@@ -89,6 +89,47 @@ def trim_edge_silence(
     return audio[start:end].astype(np.float32)
 
 
+def tighten_pauses(
+    audio: np.ndarray,
+    sr: int,
+    *,
+    min_pause_ms: float = 200.0,
+    keep_ms: float = 90.0,
+) -> np.ndarray:
+    """Shrink the long hole a model leaves after a full stop.
+
+    A short breath stays. Speech itself is not cut or overlapped.
+    """
+    audio = _to_mono(audio)
+    if sr <= 0 or len(audio) < int(sr * 0.25):
+        return audio
+    frame = max(1, int(sr * 0.01))
+    kernel = np.ones(frame, dtype=np.float32) / float(frame)
+    env = np.convolve(np.abs(audio), kernel, mode="same")
+    loud = float(np.percentile(env, 95)) if len(env) else 0.0
+    thresh = max(0.008, loud * 0.08)
+    quiet = env < thresh
+    min_pause = int(sr * min_pause_ms / 1000.0)
+    keep = max(1, int(sr * keep_ms / 1000.0))
+    pieces: list[np.ndarray] = []
+    changed = False
+    i = 0
+    n = len(quiet)
+    while i < n:
+        j = i + 1
+        while j < n and quiet[j] == quiet[i]:
+            j += 1
+        piece = audio[i:j]
+        if quiet[i] and (j - i) > min_pause:
+            piece = piece[:keep]
+            changed = True
+        pieces.append(piece)
+        i = j
+    if not changed:
+        return audio
+    return np.concatenate(pieces).astype(np.float32)
+
+
 def apply_fade(
     audio: np.ndarray,
     sr: int,
@@ -174,12 +215,14 @@ def join_segments(
     *,
     sample_rate: int | None = None,
     crossfade_ms: float = 40.0,
+    gap_ms: float = 40.0,
     normalize_final: bool = True,
 ) -> tuple[np.ndarray, int]:
     """
     segments: list of ("speech", wav_path) or ("pause", seconds)
 
-    Sequential speech is joined with a short breath, not an overlapping crossfade.
+    Sequential speech is joined with a very short breath, not an overlapping crossfade.
+    Long silences after a full stop are shortened before this join.
     Explicit [pause:Ns] markers still insert that much silence.
     """
     del crossfade_ms  # overlap joins caused doubled/garbled speech at chunk borders
@@ -195,7 +238,7 @@ def join_segments(
             assembled.append(speech_audio[0])
         else:
             assert sr is not None
-            assembled.append(crossfade_join(speech_audio, sr, crossfade_ms=0.0, gap_ms=70.0))
+            assembled.append(crossfade_join(speech_audio, sr, crossfade_ms=0.0, gap_ms=gap_ms))
         speech_audio = []
 
     for kind, payload in segments:
@@ -213,6 +256,7 @@ def join_segments(
             import librosa
 
             audio = librosa.resample(audio, orig_sr=file_sr, target_sr=sr).astype(np.float32)
+        audio = tighten_pauses(trim_edge_silence(audio, sr, max_trim_ms=1200.0, pad_ms=40.0), sr)
         speech_audio.append(audio)
 
     flush_speech()

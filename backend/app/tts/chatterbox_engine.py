@@ -53,7 +53,7 @@ class ChatterboxEngine(TTSEngine):
         self._conds_key: tuple[str, int] | None = None
         self._warmed = False
         self._loading = False
-        self.clone_mode = "fast"
+        self.clone_mode = "natural"
         self.temperature = 0.61
         self.exaggeration = 0.5
         self.cfg_weight = 0.47
@@ -79,7 +79,7 @@ class ChatterboxEngine(TTSEngine):
         return {
             "tts_device": self.device,
             "tts_fast_path": self._turbo_ok,
-            "clone_mode": getattr(self, "clone_mode", "fast"),
+            "clone_mode": getattr(self, "clone_mode", "natural"),
         }
 
     def is_available(self) -> bool:
@@ -329,7 +329,7 @@ class ChatterboxEngine(TTSEngine):
             elif self._model.conds is None:
                 raise ValueError("reference_audio is required when no voice conditionals are loaded")
 
-            if getattr(self, "clone_mode", "fast") == "quality":
+            if getattr(self, "clone_mode", "natural") == "quality":
                 wav = self._model.generate(
                     text=text,
                     language_id=language_id,
@@ -341,8 +341,11 @@ class ChatterboxEngine(TTSEngine):
                 )
                 used = "quality"
             else:
-                wav = self._fast_generate(text, language_id)
+                steps, top_p = self._naturalness()
+                wav = self._fast_generate(text, language_id, n_cfm_timesteps=steps, top_p=top_p)
                 used = "turbo" if self._turbo_ok else "cfg-fallback"
+                if used == "turbo" and steps >= 10:
+                    used = "natural"
 
         if hasattr(wav, "detach"):
             wav = wav.detach().cpu()
@@ -352,7 +355,7 @@ class ChatterboxEngine(TTSEngine):
         import numpy as np
         import soundfile as sf
 
-        from ..audio.merger import audio_too_short_for_text, trim_edge_silence
+        from ..audio.merger import audio_too_short_for_text, tighten_pauses, trim_edge_silence
 
         audio = wav.numpy()
         if audio.ndim == 2 and audio.shape[0] <= 8:
@@ -377,7 +380,7 @@ class ChatterboxEngine(TTSEngine):
                 audio = np.transpose(audio, (1, 0))
             mono = audio.mean(axis=1) if audio.ndim == 2 else audio
 
-        mono = trim_edge_silence(mono, sr)
+        mono = tighten_pauses(trim_edge_silence(mono, sr, max_trim_ms=1200.0, pad_ms=40.0), sr)
         sf.write(str(out), mono, sr, subtype="PCM_16")
         infer_sec = time.perf_counter() - t0
         self.last_infer_sec = infer_sec
@@ -395,7 +398,24 @@ class ChatterboxEngine(TTSEngine):
         )
         return out
 
-    def _fast_generate(self, text: str, language_id: str):
+    def _naturalness(self) -> tuple[int, float]:
+        """Vocoder steps and sampling width.
+
+        4 steps is the thin, synthetic tone. 10 is the model's own voice
+        reconstruction: slower, and much closer to a person speaking.
+        """
+        if getattr(self, "clone_mode", "natural") == "fast":
+            return 4, 0.90
+        return 10, 0.95
+
+    def _fast_generate(
+        self,
+        text: str,
+        language_id: str,
+        *,
+        n_cfm_timesteps: int = 10,
+        top_p: float = 0.95,
+    ):
         """Hindi/English path that skips the slow CFG + 10-step vocoder loop.
 
         Official Chatterbox.generate() duplicates the batch for CFG and runs
@@ -433,7 +453,7 @@ class ChatterboxEngine(TTSEngine):
                     text_tokens=text_tokens,
                     temperature=self.temperature,
                     top_k=1000,
-                    top_p=0.9,
+                    top_p=top_p,
                     repetition_penalty=self.repetition_penalty,
                     max_gen_len=max_gen_len,
                 )
@@ -450,7 +470,7 @@ class ChatterboxEngine(TTSEngine):
             wav, _ = model.s3gen.inference(
                 speech_tokens=speech_tokens,
                 ref_dict=model.conds.gen,
-                n_cfm_timesteps=4,
+                n_cfm_timesteps=n_cfm_timesteps,
             )
         if hasattr(wav, "detach"):
             wav = wav.detach().cpu()

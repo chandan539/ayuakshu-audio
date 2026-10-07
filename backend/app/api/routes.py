@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from ..config import detect_system_info
+from ..config import detect_system_info, normalize_clone_mode
 from ..tts.errors import ModelNotInstalledError
 from .schemas import (
     ExportAudioRequest,
@@ -350,9 +350,9 @@ def generate(body: GenerateRequest, request: Request):
     stability = body.stability
     similarity = body.similarity
     if stability is None:
-        stability = float(state.settings.get("stability", 0.6))
+        stability = float(state.settings.get("stability", 0.45))
     if similarity is None:
-        similarity = float(state.settings.get("similarity", 0.75))
+        similarity = float(state.settings.get("similarity", 0.82))
     delivery = delivery_settings(stability, similarity)
     try:
         job = state.jobs.create_job(
@@ -364,7 +364,7 @@ def generate(body: GenerateRequest, request: Request):
             max_chars=body.max_chars,
             pronunciation=body.pronunciation or None,
             export_mp3_file=body.export_mp3,
-            clone_mode=body.clone_mode or "fast",
+            clone_mode=normalize_clone_mode(body.clone_mode),
             delivery=delivery,
         )
     except ModelNotInstalledError as exc:
