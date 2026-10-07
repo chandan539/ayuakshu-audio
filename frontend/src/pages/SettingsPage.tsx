@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
+import { open } from '@tauri-apps/plugin-dialog'
+import { desktopDir, downloadDir } from '@tauri-apps/api/path'
 import { api } from '../services/api'
+
+function friendlyPath(p?: string | null) {
+  if (!p) return ''
+  return p.replace(/^\/Users\/[^/]+/, '~')
+}
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, unknown>>({})
@@ -13,6 +20,33 @@ export function SettingsPage() {
     const next = await api.updateSettings(patch)
     setSettings(next)
     setMessage('Settings saved locally.')
+  }
+
+  async function pickExportFolder() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: String(settings.export_directory || '') || undefined,
+      title: 'Choose default export folder',
+    })
+    if (!selected || Array.isArray(selected)) return
+    await save({ export_directory: selected })
+  }
+
+  async function useDesktop() {
+    try {
+      await save({ export_directory: await desktopDir() })
+    } catch {
+      setMessage('Could not resolve Desktop. Use Choose folder…')
+    }
+  }
+
+  async function useDownloads() {
+    try {
+      await save({ export_directory: await downloadDir() })
+    } catch {
+      setMessage('Could not resolve Downloads. Use Choose folder…')
+    }
   }
 
   async function clearTemp() {
@@ -52,11 +86,12 @@ export function SettingsPage() {
           <label className="field">
             <span>Voice clone mode</span>
             <select
-              value={String(settings.clone_mode || 'fast')}
+              value={String(settings.clone_mode || 'natural')}
               onChange={(e) => save({ clone_mode: e.target.value })}
             >
-              <option value="fast">Fast clone (your voice + speed)</option>
-              <option value="quality">Best clone (your voice + quality)</option>
+              <option value="natural">Natural (face to face)</option>
+              <option value="fast">Fast (plainer, quicker)</option>
+              <option value="quality">Closest match (slowest)</option>
             </select>
           </label>
           <p className="muted" style={{ gridColumn: '1 / -1', margin: '4px 0 0' }}>
@@ -78,6 +113,32 @@ export function SettingsPage() {
             pieces get smaller so a 20+ minute file can finish on 16 GB Macs. Use 220 if you
             see “MPS out of memory”.
           </p>
+          <label className="field" style={{ gridColumn: '1 / -1' }}>
+            <span>Default export folder</span>
+            <div className="mono muted" style={{ marginBottom: 8 }}>
+              {settings.export_directory
+                ? friendlyPath(String(settings.export_directory))
+                : 'Not set — Save As will open a folder picker (Desktop by default).'}
+            </div>
+            <div className="btn-row" style={{ marginTop: 0 }}>
+              <button type="button" className="btn" onClick={() => void pickExportFolder()}>
+                Choose folder…
+              </button>
+              <button type="button" className="btn" onClick={() => void useDesktop()}>
+                Use Desktop
+              </button>
+              <button type="button" className="btn" onClick={() => void useDownloads()}>
+                Use Downloads
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => void save({ export_directory: '' })}
+              >
+                Ask every time
+              </button>
+            </div>
+          </label>
           <label className="field">
             <span>MP3 Quality</span>
             <select

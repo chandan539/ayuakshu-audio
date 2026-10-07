@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -52,7 +53,15 @@ class ChatterboxEngine(TTSEngine):
         self._conds_key: tuple[str, int] | None = None
         self._warmed = False
         self._loading = False
-        self.clone_mode = "fast"
+        self.clone_mode = "natural"
+        self.temperature = 0.61
+        self.exaggeration = 0.5
+        self.cfg_weight = 0.47
+        self.repetition_penalty = 1.29
+        # None = not probed yet; True/False after first turbo attempt.
+        self._turbo_ok: bool | None = None
+        self.last_infer_sec: float = 0.0
+        self.last_path: str = "unknown"
 
     @property
     def is_loaded(self) -> bool:
@@ -65,6 +74,13 @@ class ChatterboxEngine(TTSEngine):
     @property
     def is_warmed(self) -> bool:
         return self._warmed
+
+    def runtime_info(self) -> dict:
+        return {
+            "tts_device": self.device,
+            "tts_fast_path": self._turbo_ok,
+            "clone_mode": getattr(self, "clone_mode", "natural"),
+        }
 
     def is_available(self) -> bool:
         if not self.model_dir.is_dir():
@@ -103,6 +119,11 @@ class ChatterboxEngine(TTSEngine):
                 from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
                 logger.info("Loading Chatterbox from %s on %s", self.model_dir, self.device)
+                if self.device == "cpu":
+                    logger.warning(
+                        "Chatterbox is on CPU — generation will be very slow. "
+                        "Apple Silicon MPS should be used on this Mac."
+                    )
                 model = ChatterboxMultilingualTTS.from_local(
                     str(self.model_dir),
                     self.device,
@@ -137,35 +158,73 @@ class ChatterboxEngine(TTSEngine):
                     logger.info("Skipping inference warm-up (no builtin conditionals)")
                     self._warmed = True
                     return
-                logger.info("Warming Chatterbox with short inference…")
-                _ = self._model.generate(
-                    text="Hi.",
-                    language_id="en",
-                    audio_prompt_path=None,
-                    exaggeration=0.5,
-                    cfg_weight=0.3,
-                    temperature=0.7,
-                )
+                logger.info("Warming Chatterbox with turbo path on %s…", self.device)
+                _ = self._fast_generate("Hi.", "en")
                 self._warmed = True
-                logger.info("Chatterbox warm-up complete")
+                logger.info(
+                    "Chatterbox warm-up complete device=%s turbo=%s",
+                    self.device,
+                    self._turbo_ok,
+                )
             except Exception:
                 logger.exception("Chatterbox warm-up failed (generation will still work)")
                 # Still mark warmed so we don't loop forever on a hard failure path.
                 self._warmed = True
 
-    def prepare_voice(self, reference_audio: str, *, exaggeration: float = 0.5) -> None:
+    def set_delivery(
+        self,
+        *,
+        exaggeration: float,
+        temperature: float,
+        cfg_weight: float,
+        repetition_penalty: float,
+    ) -> None:
+        self.exaggeration = float(exaggeration)
+        self.temperature = float(temperature)
+        self.cfg_weight = float(cfg_weight)
+        self.repetition_penalty = float(repetition_penalty)
+        self._apply_emotion()
+
+    def _apply_emotion(self) -> None:
+        """Update emotion on the cached clone without rebuilding the speaker embedding."""
+        model = self._model
+        if model is None or getattr(model, "conds", None) is None:
+            return
+        try:
+            import torch
+            from chatterbox.models.t3.modules.cond_enc import T3Cond
+        except Exception:
+            return
+        current = model.conds.t3
+        try:
+            current_value = float(current.emotion_adv[0, 0, 0].item())
+        except Exception:
+            current_value = None
+        if current_value is not None and abs(current_value - self.exaggeration) < 0.02:
+            return
+        model.conds.t3 = T3Cond(
+            speaker_emb=current.speaker_emb,
+            cond_prompt_speech_tokens=current.cond_prompt_speech_tokens,
+            emotion_adv=self.exaggeration * torch.ones(1, 1, 1),
+        ).to(device=model.device)
+
+    def prepare_voice(self, reference_audio: str, *, exaggeration: float | None = None) -> None:
         """Cache speaker conditionals for a reference clip (once per file)."""
         self.load()
         assert self._model is not None
+        if exaggeration is not None:
+            self.exaggeration = float(exaggeration)
         ref = Path(reference_audio).expanduser().resolve()
         if not ref.is_file():
             raise FileNotFoundError(f"Reference audio not found: {ref}")
         key = (str(ref), int(ref.stat().st_mtime_ns))
         with self._infer_lock:
             if self._conds_key == key and self._model.conds is not None:
+                self._apply_emotion()
                 return
-            self._model.prepare_conditionals(str(ref), exaggeration=exaggeration)
+            self._model.prepare_conditionals(str(ref), exaggeration=self.exaggeration)
             self._conds_key = key
+            self._apply_emotion()
 
     def generate(
         self,
@@ -257,27 +316,36 @@ class ChatterboxEngine(TTSEngine):
         out: Path,
     ) -> Path:
         assert self._model is not None
+        t0 = time.perf_counter()
+        used = "quality"
         with self._infer_lock:
             if reference_audio:
                 ref = Path(reference_audio).expanduser().resolve()
                 key = (str(ref), int(ref.stat().st_mtime_ns))
                 if self._conds_key != key or self._model.conds is None:
-                    self._model.prepare_conditionals(str(ref), exaggeration=0.5)
+                    self._model.prepare_conditionals(str(ref), exaggeration=self.exaggeration)
                     self._conds_key = key
+                self._apply_emotion()
             elif self._model.conds is None:
                 raise ValueError("reference_audio is required when no voice conditionals are loaded")
 
-            if getattr(self, "clone_mode", "fast") == "quality":
+            if getattr(self, "clone_mode", "natural") == "quality":
                 wav = self._model.generate(
                     text=text,
                     language_id=language_id,
                     audio_prompt_path=None,
-                    exaggeration=0.5,
-                    cfg_weight=0.4,
-                    temperature=0.8,
+                    exaggeration=self.exaggeration,
+                    cfg_weight=self.cfg_weight,
+                    temperature=self.temperature,
+                    repetition_penalty=max(1.05, self.repetition_penalty),
                 )
+                used = "quality"
             else:
-                wav = self._fast_generate(text, language_id)
+                steps, top_p = self._naturalness()
+                wav = self._fast_generate(text, language_id, n_cfm_timesteps=steps, top_p=top_p)
+                used = "turbo" if self._turbo_ok else "cfg-fallback"
+                if used == "turbo" and steps >= 10:
+                    used = "natural"
 
         if hasattr(wav, "detach"):
             wav = wav.detach().cpu()
@@ -287,13 +355,67 @@ class ChatterboxEngine(TTSEngine):
         import numpy as np
         import soundfile as sf
 
+        from ..audio.merger import audio_too_short_for_text, tighten_pauses, trim_edge_silence
+
         audio = wav.numpy()
         if audio.ndim == 2 and audio.shape[0] <= 8:
             audio = np.transpose(audio, (1, 0))
-        sf.write(str(out), audio, int(self._model.sr), subtype="PCM_16")
+        mono = audio.mean(axis=1) if audio.ndim == 2 else audio
+        sr = int(self._model.sr)
+        if audio_too_short_for_text(mono, sr, text) and used != "quality":
+            logger.warning(
+                "Chunk too short/silent (%d chars, %.2fs) — regenerating more conservatively",
+                len(text),
+                len(mono) / sr if sr else 0.0,
+            )
+            with self._infer_lock:
+                wav = self._stable_generate(text, language_id)
+            used = "stable-retry"
+            if hasattr(wav, "detach"):
+                wav = wav.detach().cpu()
+            if wav.ndim == 1:
+                wav = wav.unsqueeze(0)
+            audio = wav.numpy()
+            if audio.ndim == 2 and audio.shape[0] <= 8:
+                audio = np.transpose(audio, (1, 0))
+            mono = audio.mean(axis=1) if audio.ndim == 2 else audio
+
+        mono = tighten_pauses(trim_edge_silence(mono, sr, max_trim_ms=1200.0, pad_ms=40.0), sr)
+        sf.write(str(out), mono, sr, subtype="PCM_16")
+        infer_sec = time.perf_counter() - t0
+        self.last_infer_sec = infer_sec
+        self.last_path = used
+        audio_sec = float(len(mono) / sr) if sr else 0.0
+        rtf = (infer_sec / audio_sec) if audio_sec > 0.05 else 0.0
+        logger.info(
+            "chunk path=%s device=%s chars=%d infer=%.2fs audio=%.2fs rtf=%.2fx",
+            used,
+            self.device,
+            len(text),
+            infer_sec,
+            audio_sec,
+            rtf,
+        )
         return out
 
-    def _fast_generate(self, text: str, language_id: str):
+    def _naturalness(self) -> tuple[int, float]:
+        """Vocoder steps and sampling width.
+
+        4 steps is the thin, synthetic tone. 10 is the model's own voice
+        reconstruction: slower, and much closer to a person speaking.
+        """
+        if getattr(self, "clone_mode", "natural") == "fast":
+            return 4, 0.90
+        return 10, 0.95
+
+    def _fast_generate(
+        self,
+        text: str,
+        language_id: str,
+        *,
+        n_cfm_timesteps: int = 10,
+        top_p: float = 0.95,
+    ):
         """Hindi/English path that skips the slow CFG + 10-step vocoder loop.
 
         Official Chatterbox.generate() duplicates the batch for CFG and runs
@@ -317,31 +439,29 @@ class ChatterboxEngine(TTSEngine):
         text_tokens = F.pad(text_tokens, (1, 0), value=sot)
         text_tokens = F.pad(text_tokens, (0, 1), value=eot)
 
-        # ~25 speech tokens/sec; cap so short lines don't walk 1000 steps.
-        max_gen_len = min(1000, max(80, int(len(text) * 2.2) + 40))
+        # ~25 speech tokens/sec. Hindi syllables need more tokens than English chars.
+        # Cap high enough that EOS can fire; too-low caps cut the line into silence.
+        max_gen_len = min(1600, max(200, int(len(text) * 4.2) + 100))
 
         with torch.inference_mode():
+            if self._turbo_ok is False:
+                wav = self._cfg_fallback(text, language_id)
+                return wav
             try:
                 speech_tokens = model.t3.inference_turbo(
                     t3_cond=model.conds.t3,
                     text_tokens=text_tokens,
-                    temperature=0.7,
+                    temperature=self.temperature,
                     top_k=1000,
-                    top_p=0.95,
-                    repetition_penalty=1.2,
+                    top_p=top_p,
+                    repetition_penalty=self.repetition_penalty,
                     max_gen_len=max_gen_len,
                 )
-            except Exception:
-                logger.exception("Turbo sampling failed; using slower CFG path")
-                wav = model.generate(
-                    text=text,
-                    language_id=language_id,
-                    audio_prompt_path=None,
-                    exaggeration=0.4,
-                    cfg_weight=0.0,
-                    temperature=0.7,
-                )
-                return wav
+                self._turbo_ok = True
+            except (AttributeError, TypeError, RuntimeError) as exc:
+                logger.exception("Turbo sampling failed once; later chunks use slower CFG path: %s", exc)
+                self._turbo_ok = False
+                return self._cfg_fallback(text, language_id)
 
             if speech_tokens.ndim == 2:
                 speech_tokens = speech_tokens[0]
@@ -350,11 +470,36 @@ class ChatterboxEngine(TTSEngine):
             wav, _ = model.s3gen.inference(
                 speech_tokens=speech_tokens,
                 ref_dict=model.conds.gen,
-                n_cfm_timesteps=2,
+                n_cfm_timesteps=n_cfm_timesteps,
             )
         if hasattr(wav, "detach"):
             wav = wav.detach().cpu()
         return wav
+
+    def _stable_generate(self, text: str, language_id: str):
+        """One retry when turbo produced near-silence or a clipped line."""
+        model = self._model
+        assert model is not None
+        return model.generate(
+            text=text,
+            language_id=language_id,
+            audio_prompt_path=None,
+            exaggeration=0.4,
+            cfg_weight=0.3,
+            temperature=0.6,
+        )
+
+    def _cfg_fallback(self, text: str, language_id: str):
+        model = self._model
+        assert model is not None
+        return model.generate(
+            text=text,
+            language_id=language_id,
+            audio_prompt_path=None,
+            exaggeration=0.4,
+            cfg_weight=0.0,
+            temperature=0.7,
+        )
 
     @staticmethod
     def _is_oom(exc: BaseException) -> bool:

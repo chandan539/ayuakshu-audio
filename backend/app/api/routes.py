@@ -7,9 +7,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from ..config import detect_system_info
+from ..config import detect_system_info, normalize_clone_mode
 from ..tts.errors import ModelNotInstalledError
 from .schemas import (
+    ExportAudioRequest,
     GenerateRequest,
     HealthResponse,
     InstallModelRequest,
@@ -18,6 +19,7 @@ from .schemas import (
     SettingsUpdateRequest,
     TranscribeRequest,
     VoiceCreateRequest,
+    VoiceDesignRequest,
 )
 
 
@@ -36,6 +38,7 @@ router = APIRouter()
 def health(request: Request):
     state = get_state(request)
     engine = state.tts.get_engine(state.settings.get("default_engine", "chatterbox"))
+    info = engine.runtime_info() if hasattr(engine, "runtime_info") else {}
     return HealthResponse(
         status="ok",
         offline_mode=bool(state.settings.get("offline_mode", True)),
@@ -47,6 +50,8 @@ def health(request: Request):
             or (getattr(engine, "is_loaded", False) and not getattr(engine, "is_warmed", True))
         ),
         app_data=str(state.paths.root),
+        tts_device=str(info.get("tts_device") or getattr(engine, "device", "unknown")),
+        tts_fast_path=info.get("tts_fast_path"),
     )
 
 
@@ -63,6 +68,14 @@ def get_settings(request: Request):
 @router.put("/settings")
 def update_settings(body: SettingsUpdateRequest, request: Request):
     values = {k: v for k, v in body.model_dump().items() if v is not None}
+    folder = values.get("export_directory")
+    if isinstance(folder, str) and folder.strip():
+        from ..security import PathSecurityError, ensure_export_destination
+
+        try:
+            values["export_directory"] = str(ensure_export_destination(Path(folder)))
+        except PathSecurityError as exc:
+            raise HTTPException(400, str(exc)) from exc
     return get_state(request).settings.update(values)
 
 
@@ -168,6 +181,41 @@ def create_voice(body: VoiceCreateRequest, request: Request):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return voice
+
+
+@router.get("/voices/design/presets")
+def voice_design_presets():
+    from ..tts.delivery import PRESETS
+
+    return {"presets": PRESETS}
+
+
+@router.post("/voices/design")
+def design_voice(body: VoiceDesignRequest, request: Request):
+    from ..tts.delivery import detect_language, style_from_prompt
+
+    style = style_from_prompt(body.prompt, preset_id=body.preset_id)
+    if not str(style.get("prompt") or "").strip():
+        raise HTTPException(400, "Describe the voice or pick a preset.")
+    language = body.language
+    if language in {"", "auto"}:
+        language = detect_language(str(style["prompt"]))
+    if language not in {"hi", "en"}:
+        language = "en"
+    name = (body.name or "").strip() or str(style["name"])
+    try:
+        voice = get_state(request).voices.design(
+            base_voice_id=body.base_voice_id,
+            name=name,
+            language=language,
+            prompt=str(style["prompt"]),
+            delivery=style,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"voice": voice, "delivery": style}
 
 
 @router.post("/voices/upload")
@@ -293,18 +341,31 @@ def delete_project(project_id: str, request: Request):
 
 @router.post("/generate")
 def generate(body: GenerateRequest, request: Request):
+    from ..tts.delivery import delivery_settings, detect_language
+
     state = get_state(request)
+    language = body.language
+    if language in {"", "auto"}:
+        language = detect_language(body.text)
+    stability = body.stability
+    similarity = body.similarity
+    if stability is None:
+        stability = float(state.settings.get("stability", 0.45))
+    if similarity is None:
+        similarity = float(state.settings.get("similarity", 0.82))
+    delivery = delivery_settings(stability, similarity)
     try:
         job = state.jobs.create_job(
             text=body.text,
-            language=body.language,
+            language=language,
             voice_id=body.voice_id,
             project_id=body.project_id,
             engine=body.engine,
             max_chars=body.max_chars,
             pronunciation=body.pronunciation or None,
             export_mp3_file=body.export_mp3,
-            clone_mode=body.clone_mode or "fast",
+            clone_mode=normalize_clone_mode(body.clone_mode),
+            delivery=delivery,
         )
     except ModelNotInstalledError as exc:
         raise HTTPException(
@@ -438,6 +499,52 @@ def job_audio_mp3(job_id: str, request: Request):
     if not path.is_file():
         raise HTTPException(404, "MP3 missing on disk")
     return FileResponse(path, media_type="audio/mpeg", filename="output.mp3")
+
+
+@router.post("/jobs/{job_id}/export")
+def export_job_audio(job_id: str, body: ExportAudioRequest, request: Request):
+    """Copy generated WAV/MP3 to a user-chosen Desktop, USB, or other folder."""
+    from ..security import PathSecurityError
+    from ..services.export_audio import export_job_files
+
+    job = get_state(request).jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    dest = (body.destination or "").strip()
+    if not dest:
+        raise HTTPException(400, "Choose a destination file or folder")
+    try:
+        result = export_job_files(
+            job,
+            fmt=body.format,
+            destination=dest,
+            reveal=body.reveal,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, PathSecurityError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(500, f"Could not save file: {exc}") from exc
+
+    folder = result.get("folder")
+    if folder:
+        get_state(request).settings.update({"export_directory": folder})
+    return result
+
+
+@router.post("/jobs/{job_id}/reveal")
+def reveal_job_audio(job_id: str, request: Request, format: str = "wav"):
+    """Open Finder with the generated file selected."""
+    from ..services.export_audio import reveal_job_file
+
+    job = get_state(request).jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    try:
+        return reveal_job_file(job, format)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/transcribe")

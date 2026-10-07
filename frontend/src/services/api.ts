@@ -43,6 +43,8 @@ export type Health = {
   model_ready: boolean
   model_loaded?: boolean
   model_warming?: boolean
+  tts_device?: string
+  tts_fast_path?: boolean | null
   app_data: string
 }
 
@@ -53,6 +55,14 @@ export type Voice = {
   engine: string
   reference_audio: string
   metadata?: {
+    designed?: boolean
+    prompt?: string
+    delivery?: {
+      stability?: number
+      similarity?: number
+      temperature?: number
+      exaggeration?: number
+    }
     validation?: {
       duration_sec?: number
       quality?: string
@@ -190,6 +200,21 @@ export const api = {
   },
   deleteVoice: (id: string) =>
     request<{ deleted: boolean }>(`/voices/${id}`, { method: 'DELETE' }),
+  voiceDesignPresets: () =>
+    request<{
+      presets: Array<{ id: string; label: string; prompt: string; stability: number; similarity: number }>
+    }>('/voices/design/presets'),
+  designVoice: (body: {
+    base_voice_id: string
+    prompt: string
+    preset_id?: string
+    name?: string
+    language?: string
+  }) =>
+    request<{ voice: Voice; delivery: Record<string, unknown> }>('/voices/design', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   transcribe: (body: { audio_path: string; language?: string }) =>
     request<{ text: string; language?: string; segments?: unknown[] }>('/transcribe', {
       method: 'POST',
@@ -238,7 +263,9 @@ export const api = {
     max_chars?: number
     pronunciation?: Record<string, string>
     export_mp3?: boolean
-    clone_mode?: 'fast' | 'quality'
+    clone_mode?: 'natural' | 'fast' | 'quality'
+    stability?: number
+    similarity?: number
   }) =>
     request<{ job_id: string; job: Job }>('/generate', {
       method: 'POST',
@@ -250,6 +277,21 @@ export const api = {
     request<Job>(`/jobs/${id}/cancel`, { method: 'POST' }),
   resumeJob: (id: string) =>
     request<{ job_id: string; job: Job }>(`/jobs/${id}/resume`, { method: 'POST' }),
+  exportJob: (id: string, body: { format: 'wav' | 'mp3' | 'both'; destination: string; reveal?: boolean }) =>
+    request<{
+      ok: boolean
+      copied: Array<{ format: string; path: string }>
+      folder: string
+      message: string
+    }>(`/jobs/${id}/export`, {
+      method: 'POST',
+      body: JSON.stringify({ reveal: true, ...body }),
+    }),
+  revealJob: (id: string, format: 'wav' | 'mp3' = 'wav') =>
+    request<{ ok: boolean; path: string; folder: string }>(
+      `/jobs/${id}/reveal?format=${format}`,
+      { method: 'POST' },
+    ),
   clearTemp: () =>
     request<{ removed: number }>('/storage/clear-temporary', { method: 'POST' }),
 }

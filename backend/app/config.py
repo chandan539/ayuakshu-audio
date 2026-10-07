@@ -98,7 +98,20 @@ class SettingsDefaults:
     mp3_bitrate: int = 192
     crossfade_ms: float = 40.0
     unload_model_after_inactivity: bool = False
-    clone_mode: str = "fast"  # fast = speed + your voice; quality = slower, closer clone
+    clone_mode: str = "natural"  # natural = conversational; fast = quicker; quality = closest clone
+    export_directory: str = ""  # empty = ask with Save dialog each time
+    stability: float = 0.45  # 0 creative, 1 robust. Mid-low keeps a speaking contour.
+    similarity: float = 0.82  # 0 loose, 1 close to the cloned recording
+
+
+CLONE_MODES = ("natural", "fast", "quality")
+
+
+def normalize_clone_mode(value: str | None) -> str:
+    """natural = face-to-face delivery. fast = thinner and quicker. quality = full clone."""
+    if value in CLONE_MODES:
+        return str(value)
+    return "natural"
 
 
 def recommended_max_chunk_chars(memory_gb: float | None = None) -> int:

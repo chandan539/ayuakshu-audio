@@ -14,7 +14,8 @@ class HealthResponse(BaseModel):
     model_ready: bool
     model_loaded: bool = False
     model_warming: bool = False
-    app_data: str
+    tts_device: str = "unknown"
+    tts_fast_path: Optional[bool] = None
 
 
 class VoiceCreateRequest(BaseModel):
@@ -50,7 +51,17 @@ class GenerateRequest(BaseModel):
     max_chars: Optional[int] = None
     pronunciation: dict[str, str] = Field(default_factory=dict)
     export_mp3: bool = True
-    clone_mode: Optional[str] = "fast"
+    clone_mode: Optional[str] = "natural"
+    stability: Optional[float] = None
+    similarity: Optional[float] = None
+
+
+class VoiceDesignRequest(BaseModel):
+    base_voice_id: str
+    prompt: str = ""
+    preset_id: Optional[str] = None
+    name: Optional[str] = None
+    language: str = "auto"
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -62,6 +73,15 @@ class SettingsUpdateRequest(BaseModel):
     crossfade_ms: Optional[float] = None
     unload_model_after_inactivity: Optional[bool] = None
     clone_mode: Optional[str] = None
+    export_directory: Optional[str] = None
+    stability: Optional[float] = None
+    similarity: Optional[float] = None
+
+
+class ExportAudioRequest(BaseModel):
+    format: str = "wav"  # wav | mp3 | both
+    destination: str
+    reveal: bool = True
 
 
 class InstallModelRequest(BaseModel):

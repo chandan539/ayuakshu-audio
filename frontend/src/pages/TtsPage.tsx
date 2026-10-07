@@ -13,14 +13,16 @@ type Props = {
   initialProject?: Project | null
 }
 
-const DRAFT_KEY = 'ayu.ttsDraft'
+const DRAFT_KEY = 'ayu.ttsDraft.v2'
 
 function loadDraft(): Partial<{
   text: string
-  language: 'hi' | 'en'
+  language: 'hi' | 'en' | 'auto'
   voiceId: string
   projectId: string
-  cloneMode: 'fast' | 'quality'
+  cloneMode: 'natural' | 'fast' | 'quality'
+  stability: number
+  similarity: number
 }> {
   try {
     const raw = sessionStorage.getItem(DRAFT_KEY)
@@ -28,6 +30,14 @@ function loadDraft(): Partial<{
   } catch {
     return {}
   }
+}
+
+function spokenLanguage(text: string, language: 'hi' | 'en' | 'auto'): 'hi' | 'en' {
+  if (language === 'hi' || language === 'en') return language
+  const devanagari = (text.match(/[\u0900-\u097F]/g) || []).length
+  const latin = (text.match(/[A-Za-z]/g) || []).length
+  if (devanagari === 0 && latin === 0) return 'hi'
+  return devanagari >= latin ? 'hi' : 'en'
 }
 
 function countWords(text: string) {
@@ -40,10 +50,10 @@ function estimateMinutes(chars: number) {
 }
 
 /** Wall-clock after Fast mode (turbo sampling + 2-step vocoder). First load extra. */
-function estimateGenMinutes(chars: number, mode: 'fast' | 'quality') {
+function estimateGenMinutes(chars: number, mode: 'natural' | 'fast' | 'quality') {
   const audioMins = estimateMinutes(chars)
-  // Fast = your voice, speed-first. Quality = same voice, closer clone, slower.
-  return Math.max(0.2, audioMins * (mode === 'quality' ? 8 : 1.4))
+  const factor = mode === 'quality' ? 8 : mode === 'fast' ? 1.4 : 2.8
+  return Math.max(0.2, audioMins * factor)
 }
 
 function isLoadingStage(stage?: string | null) {
@@ -57,8 +67,8 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
   const [voiceId, setVoiceId] = useState(
     initialProject?.voice_id || draft.voiceId || voices[0]?.id || '',
   )
-  const [language, setLanguage] = useState<'hi' | 'en'>(
-    (initialProject?.language as 'hi' | 'en') || draft.language || 'hi',
+  const [language, setLanguage] = useState<'hi' | 'en' | 'auto'>(
+    (initialProject?.language as 'hi' | 'en') || draft.language || 'auto',
   )
   const [text, setText] = useState(
     initialProject?.text ||
@@ -66,13 +76,17 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
       'नमस्ते, मेरा नाम चंदन है।\nआज हम एक नए विषय के बारे में बात करेंगे।',
   )
   const [projectId, setProjectId] = useState<string>(initialProject?.id || draft.projectId || '')
-  const [cloneMode, setCloneMode] = useState<'fast' | 'quality'>(draft.cloneMode || 'fast')
+  const [cloneMode, setCloneMode] = useState<'natural' | 'fast' | 'quality'>(draft.cloneMode || 'natural')
+  const [stability, setStability] = useState(draft.stability ?? 0.45)
+  const [similarity, setSimilarity] = useState(draft.similarity ?? 0.82)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [job, setJob] = useState<Job | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [modelLoaded, setModelLoaded] = useState(false)
   const [modelWarming, setModelWarming] = useState(false)
+  const [ttsDevice, setTtsDevice] = useState<string>('unknown')
+  const [ttsFastPath, setTtsFastPath] = useState<boolean | null>(null)
   const pollRef = useRef<number | null>(null)
   const appliedProject = useRef<string | null>(initialProject?.id || null)
 
@@ -80,9 +94,9 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
   useEffect(() => {
     sessionStorage.setItem(
       DRAFT_KEY,
-      JSON.stringify({ text, language, voiceId, projectId, cloneMode }),
+      JSON.stringify({ text, language, voiceId, projectId, cloneMode, stability, similarity }),
     )
-  }, [text, language, voiceId, projectId, cloneMode])
+  }, [text, language, voiceId, projectId, cloneMode, stability, similarity])
 
   useEffect(() => {
     if (!voiceId && voices[0]?.id) setVoiceId(voices[0].id)
@@ -101,6 +115,14 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
   }, [initialProject])
 
   useEffect(() => {
+    const selected = voices.find((v) => v.id === voiceId)
+    const delivery = selected?.metadata?.delivery
+    if (!delivery) return
+    if (typeof delivery.stability === 'number') setStability(delivery.stability)
+    if (typeof delivery.similarity === 'number') setSimilarity(delivery.similarity)
+  }, [voiceId, voices])
+
+  useEffect(() => {
     let cancelled = false
     async function pollHealth() {
       try {
@@ -108,6 +130,8 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
         if (cancelled) return
         setModelLoaded(Boolean(h.model_loaded))
         setModelWarming(Boolean(h.model_warming))
+        setTtsDevice(String(h.tts_device || 'unknown'))
+        setTtsFastPath(h.tts_fast_path ?? null)
       } catch {
         /* ignore */
       }
@@ -179,7 +203,7 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
           stopPolling()
           setBusy(false)
           if (latest.status === 'completed') {
-            setNotice('Generation complete. Audio saved locally as one WAV + MP3.')
+            setNotice('Generation complete. Use Save WAV as… / Save MP3 as… to pick Desktop, Downloads, or a USB drive.')
             void onRefresh()
           } else if (latest.status === 'failed' || latest.status === 'interrupted') {
             setError(latest.error || 'Generation paused. Click Resume to continue this long file.')
@@ -239,30 +263,33 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
     }
     setBusy(true)
     try {
+      const lang = spokenLanguage(text, language)
       let pid = projectId
       if (!pid) {
         const created = await api.createProject({
-          title: language === 'hi' ? 'Hindi Project' : 'English Project',
+          title: lang === 'hi' ? 'Hindi Project' : 'English Project',
           text,
-          language,
+          language: lang,
           voice_id: voiceId,
         })
         pid = created.id
         setProjectId(pid)
       } else {
-        await api.updateProject(pid, { text, language, voice_id: voiceId })
+        await api.updateProject(pid, { text, language: lang, voice_id: voiceId })
       }
 
       const { job_id, job: createdJob } = await api.generate({
         text,
-        language,
+        language: lang,
         voice_id: voiceId,
         project_id: pid,
         export_mp3: true,
         clone_mode: cloneMode,
+        stability,
+        similarity,
         pronunciation: {
-          SUBHAG: language === 'hi' ? 'सुभाग' : 'Soobhag',
-          HealthTech: language === 'hi' ? 'हेल्थटेक' : 'Health Tech',
+          SUBHAG: lang === 'hi' ? 'सुभाग' : 'Soobhag',
+          HealthTech: lang === 'hi' ? 'हेल्थटेक' : 'Health Tech',
         },
       })
       setJob(createdJob || { id: job_id, status: 'queued', progress: 0, current_chunk: 0, total_chunks: 0 })
@@ -316,9 +343,26 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
           AI model is warming up in the background. Wait until ready for faster first generation.
         </div>
       )}
-      {modelReady && modelLoaded && !modelWarming && !busy && (
+      {modelReady && ttsDevice === 'cpu' && (
+        <div className="notice danger">
+          TTS is running on CPU, which is much slower. This app expects Apple Silicon GPU (MPS).
+        </div>
+      )}
+      {modelReady && cloneMode === 'quality' && (
+        <div className="notice warn">
+          Closest match runs the full clone and is much slower. Natural is the speaking voice for everyday use.
+        </div>
+      )}
+      {modelReady && ttsDevice === 'mps' && cloneMode === 'fast' && ttsFastPath === false && (
+        <div className="notice warn">
+          Fast turbo path failed and fell back to the slow generator. Check logs for “Turbo sampling failed”.
+        </div>
+      )}
+      {modelReady && ttsDevice === 'mps' && cloneMode !== 'quality' && !busy && (
         <div className="notice" style={{ opacity: 0.85 }}>
-          AI model is loaded in memory — generation should start promptly.
+          Apple GPU (MPS){modelLoaded ? ' · model loaded' : ''} ·{' '}
+          {cloneMode === 'natural' ? 'Natural voice' : 'Fast voice'}
+          {ttsFastPath === true ? ' · turbo on' : ''}.
         </div>
       )}
       {notice && <div className="notice">{notice}</div>}
@@ -339,7 +383,8 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
           </label>
           <label className="field">
             <span>Language</span>
-            <select value={language} onChange={(e) => setLanguage(e.target.value as 'hi' | 'en')}>
+            <select value={language} onChange={(e) => setLanguage(e.target.value as 'hi' | 'en' | 'auto')}>
+              <option value="auto">Auto (recommended)</option>
               <option value="hi">Hindi</option>
               <option value="en">English</option>
             </select>
@@ -347,19 +392,51 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
         </div>
 
         <label className="field" style={{ marginTop: 16 }}>
-          <span>Your voice — pick speed or quality</span>
+          <span>Model</span>
           <select
             value={cloneMode}
-            onChange={(e) => setCloneMode(e.target.value as 'fast' | 'quality')}
+            onChange={(e) => setCloneMode(e.target.value as 'natural' | 'fast' | 'quality')}
           >
-            <option value="fast">Fast clone — your voice, as quick as this Mac allows</option>
-            <option value="quality">Best clone — your voice, slower, closer match</option>
+            <option value="natural">Natural — face to face (recommended)</option>
+            <option value="fast">Fast — plainer, quicker</option>
+            <option value="quality">Closest match — slowest</option>
           </select>
         </label>
+
+        <div className="slider-block">
+          <span style={{ fontWeight: 600 }}>Stability</span>
+          <div className="slider-labels">
+            <span>Creative</span>
+            <span>Robust</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={stability}
+            onChange={(e) => setStability(Number(e.target.value))}
+          />
+        </div>
+        <div className="slider-block">
+          <span style={{ fontWeight: 600 }}>Similarity</span>
+          <div className="slider-labels">
+            <span>Low</span>
+            <span>High</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={similarity}
+            onChange={(e) => setSimilarity(Number(e.target.value))}
+          />
+        </div>
         <p className="muted" style={{ marginTop: 8, marginBottom: 0 }}>
-          Both use the selected cloned voice. Fast skips extra GPU steps. Best runs the full clone
-          model. No cloud. 5 minutes of audio in 1–2 minutes is typical of cloud APIs; Fast is the
-          closest offline target (often ~2–6 min for a 5 min track after the model is loaded).
+          Natural is the speaking voice: a person explaining something to you, with a short breath
+          between thoughts. Stability makes that more even. Similarity keeps your recording. Fast is
+          thinner and quicker. All of it stays on this Mac.
         </p>
 
         <label className="field" style={{ marginTop: 16 }}>
@@ -439,10 +516,12 @@ export function TtsPage({ voices, projects, onRefresh, modelReady, initialProjec
         )}
 
         <AudioPlayer
+          jobId={job?.id}
           wavPath={job?.output_wav && job.id ? `${getBaseUrl()}/jobs/${job.id}/audio.wav` : null}
           mp3Path={job?.output_mp3 && job.id ? `${getBaseUrl()}/jobs/${job.id}/audio.mp3` : null}
           wavLabel={job?.output_wav}
           mp3Label={job?.output_mp3}
+          onMessage={setNotice}
         />
       </div>
 

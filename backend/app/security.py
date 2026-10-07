@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -50,3 +51,46 @@ def ensure_within(path: Path, *allowed_roots: Path) -> Path:
         except ValueError:
             continue
     raise PathSecurityError(f"Path not in approved directories: {resolved}")
+
+
+def export_allowed_roots() -> list[Path]:
+    """Places a user may save exported WAV/MP3 (Desktop, USB, test dirs)."""
+    roots: list[Path] = [Path.home()]
+    for extra in (
+        Path("/Volumes"),
+        Path("/tmp"),
+        Path("/private/tmp"),
+        Path("/private/var/folders"),
+        Path("/var/folders"),
+        Path("/var/tmp"),
+    ):
+        if extra.exists():
+            roots.append(extra)
+    for env_key in ("OFFLINEVOICE_EXPORT_ROOT", "OFFLINEVOICE_DATA_DIR"):
+        raw = os.environ.get(env_key)
+        if raw:
+            roots.append(Path(raw).expanduser())
+    return roots
+
+
+def ensure_export_destination(path: Path) -> Path:
+    """Allow writing exports under Home, USB volumes, or temp (tests)."""
+    resolved = Path(path).expanduser().resolve()
+    if any(part.endswith(".app") for part in resolved.parts):
+        raise PathSecurityError("Cannot export into an application bundle")
+    blocked = (
+        Path("/System"),
+        Path("/usr"),
+        Path("/bin"),
+        Path("/sbin"),
+        Path("/etc"),
+        Path("/Library"),
+        Path("/Applications"),
+    )
+    for root in blocked:
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        raise PathSecurityError(f"Cannot export to system location: {resolved}")
+    return ensure_within(resolved, *export_allowed_roots())

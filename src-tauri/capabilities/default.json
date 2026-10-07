@@ -3,8 +3,9 @@
   "identifier": "default",
   "description": "AYUAKSHU Audio desktop capabilities",
   "windows": ["main"],
-  "permissions": [
+    "permissions": [
     "core:default",
+    "core:path:default",
     "dialog:default",
     "fs:default",
     "shell:allow-open"

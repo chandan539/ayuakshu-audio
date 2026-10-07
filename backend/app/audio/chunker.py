@@ -57,6 +57,9 @@ def apply_pronunciation_dictionary(text: str, mapping: dict[str, str] | None) ->
     return out
 
 
+_PHRASE_END = set(".!?")
+
+
 def normalize_text(text: str) -> str:
     # Preserve Unicode (Devanagari). Normalize newlines; collapse excessive spaces.
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -64,9 +67,25 @@ def normalize_text(text: str) -> str:
     text = re.sub(r"\*\*\[/?WHISPER\]\*\*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\[/?WHISPER\]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\[(?:MUSIC|SFX|SOUND|NOISE)[^\]]*\]", " ", text, flags=re.IGNORECASE)
+    # The local model finishes a phrase on "." . A Hindi danda or an ellipsis
+    # otherwise runs on, which is the flat, read-aloud sound.
+    text = text.replace("॥", ". ").replace("।", ". ")
+    text = text.replace("…", ". ").replace("...", ". ")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def close_phrase(text: str) -> str:
+    """Give a cut-off chunk a finished ending so the voice does not trail off."""
+    text = text.strip()
+    if not text:
+        return text
+    if text[-1] in _PHRASE_END:
+        return text
+    if text[-1] in ",;:":
+        return text[:-1].rstrip() + "."
+    return text + "."
 
 
 def parse_pause_markers(text: str) -> list[tuple[Literal["speech", "pause"], str | float]]:
@@ -231,6 +250,7 @@ def chunk_text(
             continue
         pieces = chunk_speech_text(speech, max_chars=max_chars)
         for piece in pieces:
+            piece = close_phrase(piece)
             start = normalized.find(piece, cursor)
             if start < 0:
                 start = cursor
